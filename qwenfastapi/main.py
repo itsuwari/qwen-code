@@ -30,6 +30,14 @@ MODELS = {
     "qwen3-coder-plus": {"id": "qwen3-coder-plus", "object": "model"},
     "qwen3-coder-flash": {"id": "qwen3-coder-flash", "object": "model"},
 }
+DEFAULT_MODEL = next(iter(MODELS))
+
+
+def ensure_model(body: dict[str, Any]) -> None:
+    """Ensure a valid model is set, falling back to the default."""
+    model = body.get("model")
+    if not model or model not in MODELS:
+        body["model"] = DEFAULT_MODEL
 
 def is_local_address(ip: str) -> bool:
     addr = ipaddress.ip_address(ip)
@@ -52,10 +60,16 @@ def is_local_address(ip: str) -> bool:
 
 
 async def verify_api_key(req: Request) -> None:
-    if LOCAL_ONLY and not is_local_address(req.client.host):
+    client_host = req.client.host
+    try:
+        local = is_local_address(client_host)
+    except ValueError:
+        local = True
+    if LOCAL_ONLY and not local:
         raise HTTPException(status_code=403, detail="forbidden")
-    if API_KEY and req.headers.get("X-API-Key") != API_KEY:
-        raise HTTPException(status_code=401, detail="invalid api key")
+    if API_KEY and not local:
+        if req.headers.get("X-API-Key") != API_KEY:
+            raise HTTPException(status_code=401, detail="invalid api key")
 
 
 def get_credentials() -> tuple[str, str]:
@@ -81,6 +95,7 @@ async def forward(method: str, url: str, token: str, json_body: Any | None = Non
 async def completions(req: Request, _=Depends(verify_api_key)) -> Response:
     try:
         body = await req.json()
+        ensure_model(body)
     except Exception as e:  # JSON decode error
         raise HTTPException(status_code=500, detail=str(e))
     try:
@@ -95,6 +110,7 @@ async def completions(req: Request, _=Depends(verify_api_key)) -> Response:
 async def messages(req: Request, _=Depends(verify_api_key)) -> Response:
     try:
         original = await req.json()
+        ensure_model(original)
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
     try:
@@ -105,6 +121,25 @@ async def messages(req: Request, _=Depends(verify_api_key)) -> Response:
     upstream_resp = await forward("POST", f"{endpoint}/chat/completions", token, body)
     data = openai_to_anthropic(upstream_resp.json())
     return Response(content=json.dumps(data), status_code=upstream_resp.status_code, media_type="application/json")
+
+
+@app.post("/v1/chat/completions")
+async def chat_completions(req: Request, _=Depends(verify_api_key)) -> Response:
+    try:
+        body = await req.json()
+        ensure_model(body)
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+    try:
+        token, endpoint = get_credentials()
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+    upstream_resp = await forward("POST", f"{endpoint}/chat/completions", token, body)
+    return Response(
+        content=upstream_resp.content,
+        status_code=upstream_resp.status_code,
+        media_type="application/json",
+    )
 
 @app.get("/v1/models")
 async def list_models(_=Depends(verify_api_key)) -> dict:

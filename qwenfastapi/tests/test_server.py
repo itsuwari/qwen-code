@@ -93,18 +93,49 @@ def test_gets_model_detail(client):
     resp = client.get("/v1/models/qwen3-coder-plus")
     assert resp.json()["id"] == "qwen3-coder-plus"
 
+
 def test_rejects_invalid_api_key(monkeypatch):
+    async def run():
+        transport = httpx.ASGITransport(app=main.app, client=("203.0.113.5", 123))
+        async with httpx.AsyncClient(transport=transport, base_url="http://test") as c:
+            return await c.post(
+                "/v1/completions", json={"model": "qwen", "prompt": "hi"}, headers={"X-API-Key": "bad"}
+            )
+
     monkeypatch.setattr(main, "get_credentials", lambda: ("t", "https://upstream"))
     monkeypatch.setenv("QWEN_FASTAPI_API_KEY", "pw")
     monkeypatch.setattr(main, "API_KEY", "pw")
     monkeypatch.setattr(main, "LOCAL_ONLY", False)
-    client = TestClient(main.app)
-    resp = client.post(
-        "/v1/completions",
-        json={"model": "qwen", "prompt": "hi"},
-        headers={"X-API-Key": "bad"},
-    )
+    resp = asyncio.run(run())
     assert resp.status_code == 401
+
+
+def test_local_bypasses_api_key(monkeypatch):
+    async def fake_forward(method, url, token, json_body=None):
+        return httpx.Response(200, json={"ok": True})
+
+    monkeypatch.setattr(main, "get_credentials", lambda: ("t", "https://upstream"))
+    monkeypatch.setattr(main, "forward", fake_forward)
+    monkeypatch.setattr(main, "API_KEY", "pw")
+    monkeypatch.setattr(main, "LOCAL_ONLY", False)
+    client = TestClient(main.app)
+    resp = client.post("/v1/completions", json={"prompt": "hi"})
+    assert resp.status_code == 200
+
+
+def test_chat_completions_falls_back(client):
+    with respx.mock(assert_all_called=True) as respx_mock:
+        def check_request(request):
+            data = json.loads(request.content.decode())
+            assert data["model"] == "qwen3-coder-plus"
+            return httpx.Response(200, json={"ok": True})
+
+        respx_mock.post("https://upstream/chat/completions").mock(side_effect=check_request)
+        resp = client.post(
+            "/v1/chat/completions", json={"messages": [{"role": "user", "content": "hi"}]}
+        )
+        assert resp.status_code == 200
+        assert resp.json() == {"ok": True}
 
 
 def test_main_accepts_cli_arguments(monkeypatch):
