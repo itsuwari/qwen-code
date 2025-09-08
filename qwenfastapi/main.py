@@ -81,6 +81,10 @@ def get_credentials() -> tuple[str, str]:
     if not token:
         raise ValueError("No access token")
     endpoint = data.get("resource_url") or DEFAULT_ENDPOINT
+    # Ensure the endpoint contains a scheme. Some credential files provide a bare
+    # host name which httpx rejects because it lacks ``http://`` or ``https://``.
+    if endpoint and not endpoint.startswith(("http://", "https://")):
+        endpoint = f"https://{endpoint}"
     return token, endpoint
 
 
