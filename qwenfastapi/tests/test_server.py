@@ -269,3 +269,15 @@ def test_is_local_address_ranges():
     # Public addresses should be rejected
     assert not main.is_local_address("8.8.8.8")
     assert not main.is_local_address("2001:4860:4860::8888")
+
+
+def test_get_credentials_adds_https(monkeypatch, tmp_path):
+    creds_dir = tmp_path / ".qwen"
+    creds_dir.mkdir()
+    (creds_dir / "oauth_creds.json").write_text(
+        json.dumps({"access_token": "t", "resource_url": "upstream"})
+    )
+    monkeypatch.setenv("HOME", str(tmp_path))
+    token, endpoint = main.get_credentials()
+    assert token == "t"
+    assert endpoint == "https://upstream"
