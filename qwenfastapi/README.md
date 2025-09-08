@@ -30,3 +30,11 @@ This standalone server exposes Qwen models using both OpenAI `/v1/completions` a
          -d '{"model":"qwen","prompt":"hi"}' \
          http://localhost:3000/v1/completions
     ```
+
+    To inspect available models:
+
+    ```bash
+    curl -H "X-API-Key: $QWEN_FASTAPI_API_KEY" \
+         http://localhost:3000/v1/models
+    ```
+    which returns entries such as `qwen3-coder-plus` and `qwen3-coder-flash`.

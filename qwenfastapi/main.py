@@ -25,6 +25,12 @@ HOST = "0.0.0.0" if LOCAL_ONLY else LISTEN
 CERTFILE = os.getenv("QWEN_FASTAPI_CERTFILE")
 KEYFILE = os.getenv("QWEN_FASTAPI_KEYFILE")
 
+# Available Qwen models exposed by the proxy
+MODELS = {
+    "qwen3-coder-plus": {"id": "qwen3-coder-plus", "object": "model"},
+    "qwen3-coder-flash": {"id": "qwen3-coder-flash", "object": "model"},
+}
+
 def is_local_address(ip: str) -> bool:
     addr = ipaddress.ip_address(ip)
     if addr.version == 4:
@@ -101,23 +107,17 @@ async def messages(req: Request, _=Depends(verify_api_key)) -> Response:
     return Response(content=json.dumps(data), status_code=upstream_resp.status_code, media_type="application/json")
 
 @app.get("/v1/models")
-async def list_models(_=Depends(verify_api_key)) -> Response:
-    try:
-        token, endpoint = get_credentials()
-    except Exception as e:
-        raise HTTPException(status_code=500, detail=str(e))
-    resp = await forward("GET", f"{endpoint}/models", token)
-    return Response(content=resp.content, status_code=resp.status_code, media_type="application/json")
+async def list_models(_=Depends(verify_api_key)) -> dict:
+    """Return the set of Qwen models available via the proxy."""
+    return {"data": list(MODELS.values()), "object": "list"}
 
 
 @app.get("/v1/models/{model}")
-async def get_model(model: str, _=Depends(verify_api_key)) -> Response:
-    try:
-        token, endpoint = get_credentials()
-    except Exception as e:
-        raise HTTPException(status_code=500, detail=str(e))
-    resp = await forward("GET", f"{endpoint}/models/{model}", token)
-    return Response(content=resp.content, status_code=resp.status_code, media_type="application/json")
+async def get_model(model: str, _=Depends(verify_api_key)) -> dict:
+    info = MODELS.get(model)
+    if not info:
+        raise HTTPException(status_code=404, detail="model not found")
+    return info
 
 def main() -> None:
     import argparse

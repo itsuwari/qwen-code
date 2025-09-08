@@ -83,21 +83,15 @@ def test_proxies_messages_and_converts_response(client):
 
 
 def test_lists_models(client):
-    with respx.mock(assert_all_called=True) as respx_mock:
-        respx_mock.get("https://upstream/models").mock(
-            return_value=httpx.Response(200, json={"data": ["qwen"]})
-        )
-        resp = client.get("/v1/models")
-        assert resp.json() == {"data": ["qwen"]}
+    resp = client.get("/v1/models")
+    data = resp.json()["data"]
+    ids = {m["id"] for m in data}
+    assert {"qwen3-coder-plus", "qwen3-coder-flash"} <= ids
 
 
 def test_gets_model_detail(client):
-    with respx.mock(assert_all_called=True) as respx_mock:
-        respx_mock.get("https://upstream/models/qwen").mock(
-            return_value=httpx.Response(200, json={"id": "qwen", "context_length": 8192})
-        )
-        resp = client.get("/v1/models/qwen")
-        assert resp.json()["id"] == "qwen"
+    resp = client.get("/v1/models/qwen3-coder-plus")
+    assert resp.json()["id"] == "qwen3-coder-plus"
 
 def test_rejects_invalid_api_key(monkeypatch):
     monkeypatch.setattr(main, "get_credentials", lambda: ("t", "https://upstream"))
