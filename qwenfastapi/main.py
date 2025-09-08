@@ -11,9 +11,19 @@ DEFAULT_ENDPOINT = "https://dashscope.aliyuncs.com/compatible-mode/v1"
 app = FastAPI()
 
 API_KEY = os.getenv("QWEN_FASTAPI_API_KEY")
-LISTEN = os.getenv("QWEN_FASTAPI_HOST", "local")
+LISTEN_ENV = os.getenv("QWEN_FASTAPI_HOST", "local")
+PORT = 3000
+LISTEN = LISTEN_ENV
+if ":" in LISTEN_ENV:
+    try:
+        LISTEN, port_str = LISTEN_ENV.rsplit(":", 1)
+        PORT = int(port_str)
+    except ValueError:
+        pass
 LOCAL_ONLY = LISTEN == "local"
 HOST = "0.0.0.0" if LOCAL_ONLY else LISTEN
+CERTFILE = os.getenv("QWEN_FASTAPI_CERTFILE")
+KEYFILE = os.getenv("QWEN_FASTAPI_KEYFILE")
 
 def is_local_address(ip: str) -> bool:
     addr = ipaddress.ip_address(ip)
@@ -113,7 +123,7 @@ def main() -> None:
     import argparse
     import uvicorn
 
-    global API_KEY, HOST, LOCAL_ONLY, LISTEN
+    global API_KEY, HOST, LOCAL_ONLY, LISTEN, PORT, CERTFILE, KEYFILE
 
     parser = argparse.ArgumentParser(description="Run the Qwen FastAPI proxy server")
     parser.add_argument(
@@ -122,17 +132,36 @@ def main() -> None:
     )
     parser.add_argument(
         "--listen",
-        default=LISTEN,
-        help="IP address to listen on. Use 'local' to only allow private network clients.",
+        default=LISTEN_ENV,
+        help="IP address to listen on, optionally with :port. Use 'local' to only allow private network clients.",
     )
+    parser.add_argument("--certfile", help="Path to TLS certificate file to enable HTTPS")
+    parser.add_argument("--keyfile", help="Path to TLS private key file to enable HTTPS")
     args = parser.parse_args()
     if args.key:
         API_KEY = args.key
-    LISTEN = args.listen
+    listen_arg = args.listen
+    port = PORT
+    if ":" in listen_arg:
+        try:
+            listen_arg, port_str = listen_arg.rsplit(":", 1)
+            port = int(port_str)
+        except ValueError:
+            parser.error(f"Invalid port in --listen: {port_str}")
+    LISTEN = listen_arg
+    PORT = port
     LOCAL_ONLY = LISTEN == "local"
     HOST = "0.0.0.0" if LOCAL_ONLY else LISTEN
 
-    uvicorn.run(app, host=HOST, port=3000)
+    certfile = args.certfile or CERTFILE
+    keyfile = args.keyfile or KEYFILE
+    if certfile or keyfile:
+        if not (certfile and keyfile):
+            parser.error("--certfile and --keyfile must be provided together")
+    CERTFILE = certfile
+    KEYFILE = keyfile
+
+    uvicorn.run(app, host=HOST, port=PORT, ssl_certfile=CERTFILE, ssl_keyfile=KEYFILE)
 
 
 if __name__ == "__main__":

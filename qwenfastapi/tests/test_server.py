@@ -117,24 +117,46 @@ def test_main_accepts_cli_arguments(monkeypatch):
     import sys
     import types
 
-    called: dict[str, str | int] = {}
+    called: dict[str, str | int | None] = {}
 
-    def fake_run(app, host, port):
+    def fake_run(app, host, port, **kwargs):
         called["host"] = host
         called["port"] = port
+        called["ssl_certfile"] = kwargs.get("ssl_certfile")
+        called["ssl_keyfile"] = kwargs.get("ssl_keyfile")
 
     fake_uvicorn = types.SimpleNamespace(run=fake_run)
     monkeypatch.setitem(sys.modules, "uvicorn", fake_uvicorn)
-    monkeypatch.setattr(sys, "argv", ["prog", "--key", "cli", "--listen", "0.0.0.0"])
+    monkeypatch.setattr(
+        sys,
+        "argv",
+        [
+            "prog",
+            "--key",
+            "cli",
+            "--listen",
+            "0.0.0.0:1234",
+            "--certfile",
+            "cert.pem",
+            "--keyfile",
+            "key.pem",
+        ],
+    )
     monkeypatch.setattr(main, "API_KEY", None)
     monkeypatch.setattr(main, "LISTEN", "local")
+    monkeypatch.setattr(main, "LISTEN_ENV", "local")
+    monkeypatch.setattr(main, "PORT", 3000)
     monkeypatch.setattr(main, "LOCAL_ONLY", True)
+    monkeypatch.setattr(main, "CERTFILE", None)
+    monkeypatch.setattr(main, "KEYFILE", None)
 
     main.main()
 
     assert main.API_KEY == "cli"
     assert called["host"] == "0.0.0.0"
-    assert called["port"] == 3000
+    assert called["port"] == 1234
+    assert called["ssl_certfile"] == "cert.pem"
+    assert called["ssl_keyfile"] == "key.pem"
     assert main.LOCAL_ONLY is False
 
 
@@ -142,23 +164,31 @@ def test_main_defaults_to_local(monkeypatch):
     import sys
     import types
 
-    called: dict[str, str | int] = {}
+    called: dict[str, str | int | None] = {}
 
-    def fake_run(app, host, port):
+    def fake_run(app, host, port, **kwargs):
         called["host"] = host
         called["port"] = port
+        called["ssl_certfile"] = kwargs.get("ssl_certfile")
+        called["ssl_keyfile"] = kwargs.get("ssl_keyfile")
 
     fake_uvicorn = types.SimpleNamespace(run=fake_run)
     monkeypatch.setitem(sys.modules, "uvicorn", fake_uvicorn)
     monkeypatch.setattr(sys, "argv", ["prog"])
     monkeypatch.setattr(main, "API_KEY", None)
     monkeypatch.setattr(main, "LISTEN", "local")
+    monkeypatch.setattr(main, "LISTEN_ENV", "local")
+    monkeypatch.setattr(main, "PORT", 3000)
     monkeypatch.setattr(main, "LOCAL_ONLY", False)
+    monkeypatch.setattr(main, "CERTFILE", None)
+    monkeypatch.setattr(main, "KEYFILE", None)
 
     main.main()
 
     assert called["host"] == "0.0.0.0"
     assert called["port"] == 3000
+    assert called["ssl_certfile"] is None
+    assert called["ssl_keyfile"] is None
     assert main.LOCAL_ONLY is True
 
 
