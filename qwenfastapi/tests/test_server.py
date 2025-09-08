@@ -83,58 +83,105 @@ def test_proxies_messages_and_converts_response(client):
 
 
 def test_lists_models(client):
-    with respx.mock(assert_all_called=True) as respx_mock:
-        respx_mock.get("https://upstream/models").mock(
-            return_value=httpx.Response(200, json={"data": ["qwen"]})
-        )
-        resp = client.get("/v1/models")
-        assert resp.json() == {"data": ["qwen"]}
+    resp = client.get("/v1/models")
+    data = resp.json()["data"]
+    ids = {m["id"] for m in data}
+    assert {"qwen3-coder-plus", "qwen3-coder-flash"} <= ids
 
 
 def test_gets_model_detail(client):
-    with respx.mock(assert_all_called=True) as respx_mock:
-        respx_mock.get("https://upstream/models/qwen").mock(
-            return_value=httpx.Response(200, json={"id": "qwen", "context_length": 8192})
-        )
-        resp = client.get("/v1/models/qwen")
-        assert resp.json()["id"] == "qwen"
+    resp = client.get("/v1/models/qwen3-coder-plus")
+    assert resp.json()["id"] == "qwen3-coder-plus"
+
 
 def test_rejects_invalid_api_key(monkeypatch):
+    async def run():
+        transport = httpx.ASGITransport(app=main.app, client=("203.0.113.5", 123))
+        async with httpx.AsyncClient(transport=transport, base_url="http://test") as c:
+            return await c.post(
+                "/v1/completions", json={"model": "qwen", "prompt": "hi"}, headers={"X-API-Key": "bad"}
+            )
+
     monkeypatch.setattr(main, "get_credentials", lambda: ("t", "https://upstream"))
     monkeypatch.setenv("QWEN_FASTAPI_API_KEY", "pw")
     monkeypatch.setattr(main, "API_KEY", "pw")
     monkeypatch.setattr(main, "LOCAL_ONLY", False)
-    client = TestClient(main.app)
-    resp = client.post(
-        "/v1/completions",
-        json={"model": "qwen", "prompt": "hi"},
-        headers={"X-API-Key": "bad"},
-    )
+    resp = asyncio.run(run())
     assert resp.status_code == 401
+
+
+def test_local_bypasses_api_key(monkeypatch):
+    async def fake_forward(method, url, token, json_body=None):
+        return httpx.Response(200, json={"ok": True})
+
+    monkeypatch.setattr(main, "get_credentials", lambda: ("t", "https://upstream"))
+    monkeypatch.setattr(main, "forward", fake_forward)
+    monkeypatch.setattr(main, "API_KEY", "pw")
+    monkeypatch.setattr(main, "LOCAL_ONLY", False)
+    client = TestClient(main.app)
+    resp = client.post("/v1/completions", json={"prompt": "hi"})
+    assert resp.status_code == 200
+
+
+def test_chat_completions_falls_back(client):
+    with respx.mock(assert_all_called=True) as respx_mock:
+        def check_request(request):
+            data = json.loads(request.content.decode())
+            assert data["model"] == "qwen3-coder-plus"
+            return httpx.Response(200, json={"ok": True})
+
+        respx_mock.post("https://upstream/chat/completions").mock(side_effect=check_request)
+        resp = client.post(
+            "/v1/chat/completions", json={"messages": [{"role": "user", "content": "hi"}]}
+        )
+        assert resp.status_code == 200
+        assert resp.json() == {"ok": True}
 
 
 def test_main_accepts_cli_arguments(monkeypatch):
     import sys
     import types
 
-    called: dict[str, str | int] = {}
+    called: dict[str, str | int | None] = {}
 
-    def fake_run(app, host, port):
+    def fake_run(app, host, port, **kwargs):
         called["host"] = host
         called["port"] = port
+        called["ssl_certfile"] = kwargs.get("ssl_certfile")
+        called["ssl_keyfile"] = kwargs.get("ssl_keyfile")
 
     fake_uvicorn = types.SimpleNamespace(run=fake_run)
     monkeypatch.setitem(sys.modules, "uvicorn", fake_uvicorn)
-    monkeypatch.setattr(sys, "argv", ["prog", "--key", "cli", "--listen", "0.0.0.0"])
+    monkeypatch.setattr(
+        sys,
+        "argv",
+        [
+            "prog",
+            "--key",
+            "cli",
+            "--listen",
+            "0.0.0.0:1234",
+            "--certfile",
+            "cert.pem",
+            "--keyfile",
+            "key.pem",
+        ],
+    )
     monkeypatch.setattr(main, "API_KEY", None)
     monkeypatch.setattr(main, "LISTEN", "local")
+    monkeypatch.setattr(main, "LISTEN_ENV", "local")
+    monkeypatch.setattr(main, "PORT", 3000)
     monkeypatch.setattr(main, "LOCAL_ONLY", True)
+    monkeypatch.setattr(main, "CERTFILE", None)
+    monkeypatch.setattr(main, "KEYFILE", None)
 
     main.main()
 
     assert main.API_KEY == "cli"
     assert called["host"] == "0.0.0.0"
-    assert called["port"] == 3000
+    assert called["port"] == 1234
+    assert called["ssl_certfile"] == "cert.pem"
+    assert called["ssl_keyfile"] == "key.pem"
     assert main.LOCAL_ONLY is False
 
 
@@ -142,23 +189,31 @@ def test_main_defaults_to_local(monkeypatch):
     import sys
     import types
 
-    called: dict[str, str | int] = {}
+    called: dict[str, str | int | None] = {}
 
-    def fake_run(app, host, port):
+    def fake_run(app, host, port, **kwargs):
         called["host"] = host
         called["port"] = port
+        called["ssl_certfile"] = kwargs.get("ssl_certfile")
+        called["ssl_keyfile"] = kwargs.get("ssl_keyfile")
 
     fake_uvicorn = types.SimpleNamespace(run=fake_run)
     monkeypatch.setitem(sys.modules, "uvicorn", fake_uvicorn)
     monkeypatch.setattr(sys, "argv", ["prog"])
     monkeypatch.setattr(main, "API_KEY", None)
     monkeypatch.setattr(main, "LISTEN", "local")
+    monkeypatch.setattr(main, "LISTEN_ENV", "local")
+    monkeypatch.setattr(main, "PORT", 3000)
     monkeypatch.setattr(main, "LOCAL_ONLY", False)
+    monkeypatch.setattr(main, "CERTFILE", None)
+    monkeypatch.setattr(main, "KEYFILE", None)
 
     main.main()
 
     assert called["host"] == "0.0.0.0"
     assert called["port"] == 3000
+    assert called["ssl_certfile"] is None
+    assert called["ssl_keyfile"] is None
     assert main.LOCAL_ONLY is True
 
 

@@ -11,9 +11,33 @@ DEFAULT_ENDPOINT = "https://dashscope.aliyuncs.com/compatible-mode/v1"
 app = FastAPI()
 
 API_KEY = os.getenv("QWEN_FASTAPI_API_KEY")
-LISTEN = os.getenv("QWEN_FASTAPI_HOST", "local")
+LISTEN_ENV = os.getenv("QWEN_FASTAPI_HOST", "local")
+PORT = 3000
+LISTEN = LISTEN_ENV
+if ":" in LISTEN_ENV:
+    try:
+        LISTEN, port_str = LISTEN_ENV.rsplit(":", 1)
+        PORT = int(port_str)
+    except ValueError:
+        pass
 LOCAL_ONLY = LISTEN == "local"
 HOST = "0.0.0.0" if LOCAL_ONLY else LISTEN
+CERTFILE = os.getenv("QWEN_FASTAPI_CERTFILE")
+KEYFILE = os.getenv("QWEN_FASTAPI_KEYFILE")
+
+# Available Qwen models exposed by the proxy
+MODELS = {
+    "qwen3-coder-plus": {"id": "qwen3-coder-plus", "object": "model"},
+    "qwen3-coder-flash": {"id": "qwen3-coder-flash", "object": "model"},
+}
+DEFAULT_MODEL = next(iter(MODELS))
+
+
+def ensure_model(body: dict[str, Any]) -> None:
+    """Ensure a valid model is set, falling back to the default."""
+    model = body.get("model")
+    if not model or model not in MODELS:
+        body["model"] = DEFAULT_MODEL
 
 def is_local_address(ip: str) -> bool:
     addr = ipaddress.ip_address(ip)
@@ -36,10 +60,16 @@ def is_local_address(ip: str) -> bool:
 
 
 async def verify_api_key(req: Request) -> None:
-    if LOCAL_ONLY and not is_local_address(req.client.host):
+    client_host = req.client.host
+    try:
+        local = is_local_address(client_host)
+    except ValueError:
+        local = True
+    if LOCAL_ONLY and not local:
         raise HTTPException(status_code=403, detail="forbidden")
-    if API_KEY and req.headers.get("X-API-Key") != API_KEY:
-        raise HTTPException(status_code=401, detail="invalid api key")
+    if API_KEY and not local:
+        if req.headers.get("X-API-Key") != API_KEY:
+            raise HTTPException(status_code=401, detail="invalid api key")
 
 
 def get_credentials() -> tuple[str, str]:
@@ -65,6 +95,7 @@ async def forward(method: str, url: str, token: str, json_body: Any | None = Non
 async def completions(req: Request, _=Depends(verify_api_key)) -> Response:
     try:
         body = await req.json()
+        ensure_model(body)
     except Exception as e:  # JSON decode error
         raise HTTPException(status_code=500, detail=str(e))
     try:
@@ -79,6 +110,7 @@ async def completions(req: Request, _=Depends(verify_api_key)) -> Response:
 async def messages(req: Request, _=Depends(verify_api_key)) -> Response:
     try:
         original = await req.json()
+        ensure_model(original)
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
     try:
@@ -90,30 +122,43 @@ async def messages(req: Request, _=Depends(verify_api_key)) -> Response:
     data = openai_to_anthropic(upstream_resp.json())
     return Response(content=json.dumps(data), status_code=upstream_resp.status_code, media_type="application/json")
 
-@app.get("/v1/models")
-async def list_models(_=Depends(verify_api_key)) -> Response:
+
+@app.post("/v1/chat/completions")
+async def chat_completions(req: Request, _=Depends(verify_api_key)) -> Response:
+    try:
+        body = await req.json()
+        ensure_model(body)
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
     try:
         token, endpoint = get_credentials()
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
-    resp = await forward("GET", f"{endpoint}/models", token)
-    return Response(content=resp.content, status_code=resp.status_code, media_type="application/json")
+    upstream_resp = await forward("POST", f"{endpoint}/chat/completions", token, body)
+    return Response(
+        content=upstream_resp.content,
+        status_code=upstream_resp.status_code,
+        media_type="application/json",
+    )
+
+@app.get("/v1/models")
+async def list_models(_=Depends(verify_api_key)) -> dict:
+    """Return the set of Qwen models available via the proxy."""
+    return {"data": list(MODELS.values()), "object": "list"}
 
 
 @app.get("/v1/models/{model}")
-async def get_model(model: str, _=Depends(verify_api_key)) -> Response:
-    try:
-        token, endpoint = get_credentials()
-    except Exception as e:
-        raise HTTPException(status_code=500, detail=str(e))
-    resp = await forward("GET", f"{endpoint}/models/{model}", token)
-    return Response(content=resp.content, status_code=resp.status_code, media_type="application/json")
+async def get_model(model: str, _=Depends(verify_api_key)) -> dict:
+    info = MODELS.get(model)
+    if not info:
+        raise HTTPException(status_code=404, detail="model not found")
+    return info
 
 def main() -> None:
     import argparse
     import uvicorn
 
-    global API_KEY, HOST, LOCAL_ONLY, LISTEN
+    global API_KEY, HOST, LOCAL_ONLY, LISTEN, PORT, CERTFILE, KEYFILE
 
     parser = argparse.ArgumentParser(description="Run the Qwen FastAPI proxy server")
     parser.add_argument(
@@ -122,17 +167,36 @@ def main() -> None:
     )
     parser.add_argument(
         "--listen",
-        default=LISTEN,
-        help="IP address to listen on. Use 'local' to only allow private network clients.",
+        default=LISTEN_ENV,
+        help="IP address to listen on, optionally with :port. Use 'local' to only allow private network clients.",
     )
+    parser.add_argument("--certfile", help="Path to TLS certificate file to enable HTTPS")
+    parser.add_argument("--keyfile", help="Path to TLS private key file to enable HTTPS")
     args = parser.parse_args()
     if args.key:
         API_KEY = args.key
-    LISTEN = args.listen
+    listen_arg = args.listen
+    port = PORT
+    if ":" in listen_arg:
+        try:
+            listen_arg, port_str = listen_arg.rsplit(":", 1)
+            port = int(port_str)
+        except ValueError:
+            parser.error(f"Invalid port in --listen: {port_str}")
+    LISTEN = listen_arg
+    PORT = port
     LOCAL_ONLY = LISTEN == "local"
     HOST = "0.0.0.0" if LOCAL_ONLY else LISTEN
 
-    uvicorn.run(app, host=HOST, port=3000)
+    certfile = args.certfile or CERTFILE
+    keyfile = args.keyfile or KEYFILE
+    if certfile or keyfile:
+        if not (certfile and keyfile):
+            parser.error("--certfile and --keyfile must be provided together")
+    CERTFILE = certfile
+    KEYFILE = keyfile
+
+    uvicorn.run(app, host=HOST, port=PORT, ssl_certfile=CERTFILE, ssl_keyfile=KEYFILE)
 
 
 if __name__ == "__main__":
