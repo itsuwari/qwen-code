@@ -1,4 +1,5 @@
 from fastapi import Depends, FastAPI, HTTPException, Request, Response
+
 import httpx
 import os
 import json
@@ -63,9 +64,8 @@ async def messages(req: Request, _=Depends(verify_api_key)) -> Response:
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
     upstream_resp = await forward("POST", f"{endpoint}/chat/completions", token, body)
-    data = openai_to_anthropic(upstream_resp.json())
-    return Response(content=json.dumps(data), status_code=upstream_resp.status_code, media_type="application/json")
-
+    if not upstream_resp.is_success:
+        return Response(content=upstream_resp.content, status_code=upstream_resp.status_code, media_type="application/json")
 
 @app.get("/v1/models")
 async def list_models(_=Depends(verify_api_key)) -> Response:
