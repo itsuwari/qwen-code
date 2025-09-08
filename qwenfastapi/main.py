@@ -66,7 +66,6 @@ async def messages(req: Request, _=Depends(verify_api_key)) -> Response:
     data = openai_to_anthropic(upstream_resp.json())
     return Response(content=json.dumps(data), status_code=upstream_resp.status_code, media_type="application/json")
 
-
 @app.get("/v1/models")
 async def list_models(_=Depends(verify_api_key)) -> Response:
     try:
@@ -85,7 +84,6 @@ async def get_model(model: str, _=Depends(verify_api_key)) -> Response:
         raise HTTPException(status_code=500, detail=str(e))
     resp = await forward("GET", f"{endpoint}/models/{model}", token)
     return Response(content=resp.content, status_code=resp.status_code, media_type="application/json")
-
 
 def main() -> None:
     import uvicorn

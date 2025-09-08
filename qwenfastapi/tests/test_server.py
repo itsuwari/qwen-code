@@ -17,7 +17,6 @@ def client(monkeypatch):
     client.headers.update({"X-API-Key": "pw"})
     return client
 
-
 def test_proxies_completions_with_auth_header(client):
     with respx.mock(assert_all_called=True) as respx_mock:
         route = respx_mock.post("https://upstream/v1/completions").mock(
@@ -96,7 +95,6 @@ def test_gets_model_detail(client):
         )
         resp = client.get("/v1/models/qwen")
         assert resp.json()["id"] == "qwen"
-
 
 def test_rejects_invalid_api_key(monkeypatch):
     monkeypatch.setattr(main, "get_credentials", lambda: ("t", "https://upstream"))
