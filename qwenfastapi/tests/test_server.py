@@ -11,8 +11,11 @@ from qwenfastapi import main
 def client(monkeypatch):
     # default credentials
     monkeypatch.setattr(main, "get_credentials", lambda: ("t", "https://upstream"))
-    return TestClient(main.app)
-
+    monkeypatch.setenv("QWEN_FASTAPI_API_KEY", "pw")
+    monkeypatch.setattr(main, "API_KEY", "pw")
+    client = TestClient(main.app)
+    client.headers.update({"X-API-Key": "pw"})
+    return client
 
 def test_proxies_completions_with_auth_header(client):
     with respx.mock(assert_all_called=True) as respx_mock:
@@ -42,10 +45,12 @@ def test_forwards_upstream_error_status(client):
 
 
 def test_responds_500_when_auth_missing(monkeypatch):
-    def raise_no_access_token():
-        raise ValueError("No access token")
-    monkeypatch.setattr(main, "get_credentials", raise_no_access_token)
+    monkeypatch.setattr(main, "get_credentials", lambda: (_ for _ in ()).throw(ValueError("No access token")))
+    monkeypatch.setenv("QWEN_FASTAPI_API_KEY", "pw")
+    monkeypatch.setattr(main, "API_KEY", "pw")
     client = TestClient(main.app)
+    client.headers.update({"X-API-Key": "pw"})
+
     with respx.mock(assert_all_called=False):
         resp = client.post("/v1/completions", json={"model": "qwen", "prompt": "hi"})
         assert resp.status_code == 500
@@ -91,3 +96,15 @@ def test_gets_model_detail(client):
         )
         resp = client.get("/v1/models/qwen")
         assert resp.json()["id"] == "qwen"
+
+def test_rejects_invalid_api_key(monkeypatch):
+    monkeypatch.setattr(main, "get_credentials", lambda: ("t", "https://upstream"))
+    monkeypatch.setenv("QWEN_FASTAPI_API_KEY", "pw")
+    monkeypatch.setattr(main, "API_KEY", "pw")
+    client = TestClient(main.app)
+    resp = client.post(
+        "/v1/completions",
+        json={"model": "qwen", "prompt": "hi"},
+        headers={"X-API-Key": "bad"},
+    )
+    assert resp.status_code == 401

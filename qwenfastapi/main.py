@@ -1,4 +1,5 @@
-from fastapi import FastAPI, HTTPException, Request, Response
+from fastapi import Depends, FastAPI, HTTPException, Request, Response
+
 import httpx
 import os
 import json
@@ -8,6 +9,14 @@ from .anthropic import anthropic_to_openai, openai_to_anthropic
 DEFAULT_ENDPOINT = "https://dashscope.aliyuncs.com/compatible-mode/v1"
 
 app = FastAPI()
+
+API_KEY = os.getenv("QWEN_FASTAPI_API_KEY")
+HOST = os.getenv("QWEN_FASTAPI_HOST", "127.0.0.1")
+
+
+async def verify_api_key(req: Request) -> None:
+    if API_KEY and req.headers.get("X-API-Key") != API_KEY:
+        raise HTTPException(status_code=401, detail="invalid api key")
 
 
 def get_credentials() -> tuple[str, str]:
@@ -30,7 +39,7 @@ async def forward(method: str, url: str, token: str, json_body: Any | None = Non
 
 
 @app.post("/v1/completions")
-async def completions(req: Request) -> Response:
+async def completions(req: Request, _=Depends(verify_api_key)) -> Response:
     try:
         body = await req.json()
     except Exception as e:  # JSON decode error
@@ -44,7 +53,7 @@ async def completions(req: Request) -> Response:
 
 
 @app.post("/v1/messages")
-async def messages(req: Request) -> Response:
+async def messages(req: Request, _=Depends(verify_api_key)) -> Response:
     try:
         original = await req.json()
     except Exception as e:
@@ -57,12 +66,9 @@ async def messages(req: Request) -> Response:
     upstream_resp = await forward("POST", f"{endpoint}/chat/completions", token, body)
     if not upstream_resp.is_success:
         return Response(content=upstream_resp.content, status_code=upstream_resp.status_code, media_type="application/json")
-    data = openai_to_anthropic(upstream_resp.json())
-    return Response(content=json.dumps(data), status_code=upstream_resp.status_code, media_type="application/json")
-
 
 @app.get("/v1/models")
-async def list_models() -> Response:
+async def list_models(_=Depends(verify_api_key)) -> Response:
     try:
         token, endpoint = get_credentials()
     except Exception as e:
@@ -72,7 +78,7 @@ async def list_models() -> Response:
 
 
 @app.get("/v1/models/{model}")
-async def get_model(model: str) -> Response:
+async def get_model(model: str, _=Depends(verify_api_key)) -> Response:
     try:
         token, endpoint = get_credentials()
     except Exception as e:
@@ -83,4 +89,4 @@ async def get_model(model: str) -> Response:
 
 if __name__ == "__main__":
     import uvicorn
-    uvicorn.run(app, host="0.0.0.0", port=3000)
+    uvicorn.run(app, host=HOST, port=3000)
