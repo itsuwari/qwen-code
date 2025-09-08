@@ -1,4 +1,5 @@
 import json
+import asyncio
 from fastapi.testclient import TestClient
 import httpx
 import respx
@@ -13,6 +14,7 @@ def client(monkeypatch):
     monkeypatch.setattr(main, "get_credentials", lambda: ("t", "https://upstream"))
     monkeypatch.setenv("QWEN_FASTAPI_API_KEY", "pw")
     monkeypatch.setattr(main, "API_KEY", "pw")
+    monkeypatch.setattr(main, "LOCAL_ONLY", False)
     client = TestClient(main.app)
     client.headers.update({"X-API-Key": "pw"})
     return client
@@ -48,6 +50,7 @@ def test_responds_500_when_auth_missing(monkeypatch):
     monkeypatch.setattr(main, "get_credentials", lambda: (_ for _ in ()).throw(ValueError("No access token")))
     monkeypatch.setenv("QWEN_FASTAPI_API_KEY", "pw")
     monkeypatch.setattr(main, "API_KEY", "pw")
+    monkeypatch.setattr(main, "LOCAL_ONLY", False)
     client = TestClient(main.app)
     client.headers.update({"X-API-Key": "pw"})
     with respx.mock(assert_all_called=False):
@@ -100,6 +103,7 @@ def test_rejects_invalid_api_key(monkeypatch):
     monkeypatch.setattr(main, "get_credentials", lambda: ("t", "https://upstream"))
     monkeypatch.setenv("QWEN_FASTAPI_API_KEY", "pw")
     monkeypatch.setattr(main, "API_KEY", "pw")
+    monkeypatch.setattr(main, "LOCAL_ONLY", False)
     client = TestClient(main.app)
     resp = client.post(
         "/v1/completions",
@@ -107,3 +111,106 @@ def test_rejects_invalid_api_key(monkeypatch):
         headers={"X-API-Key": "bad"},
     )
     assert resp.status_code == 401
+
+
+def test_main_accepts_cli_arguments(monkeypatch):
+    import sys
+    import types
+
+    called: dict[str, str | int] = {}
+
+    def fake_run(app, host, port):
+        called["host"] = host
+        called["port"] = port
+
+    fake_uvicorn = types.SimpleNamespace(run=fake_run)
+    monkeypatch.setitem(sys.modules, "uvicorn", fake_uvicorn)
+    monkeypatch.setattr(sys, "argv", ["prog", "--key", "cli", "--listen", "0.0.0.0"])
+    monkeypatch.setattr(main, "API_KEY", None)
+    monkeypatch.setattr(main, "LISTEN", "local")
+    monkeypatch.setattr(main, "LOCAL_ONLY", True)
+
+    main.main()
+
+    assert main.API_KEY == "cli"
+    assert called["host"] == "0.0.0.0"
+    assert called["port"] == 3000
+    assert main.LOCAL_ONLY is False
+
+
+def test_main_defaults_to_local(monkeypatch):
+    import sys
+    import types
+
+    called: dict[str, str | int] = {}
+
+    def fake_run(app, host, port):
+        called["host"] = host
+        called["port"] = port
+
+    fake_uvicorn = types.SimpleNamespace(run=fake_run)
+    monkeypatch.setitem(sys.modules, "uvicorn", fake_uvicorn)
+    monkeypatch.setattr(sys, "argv", ["prog"])
+    monkeypatch.setattr(main, "API_KEY", None)
+    monkeypatch.setattr(main, "LISTEN", "local")
+    monkeypatch.setattr(main, "LOCAL_ONLY", False)
+
+    main.main()
+
+    assert called["host"] == "0.0.0.0"
+    assert called["port"] == 3000
+    assert main.LOCAL_ONLY is True
+
+
+def test_allows_private_client(monkeypatch):
+    async def fake_forward(method, url, token, json_body=None):
+        return httpx.Response(200, json={"ok": True})
+
+    monkeypatch.setattr(main, "get_credentials", lambda: ("t", "https://upstream"))
+    monkeypatch.setattr(main, "forward", fake_forward)
+    monkeypatch.setattr(main, "API_KEY", None)
+    monkeypatch.setattr(main, "LOCAL_ONLY", True)
+
+    async def run():
+        transport = httpx.ASGITransport(app=main.app, client=("10.1.2.3", 123))
+        async with httpx.AsyncClient(transport=transport, base_url="http://test") as c:
+            return await c.post("/v1/completions", json={"model": "qwen", "prompt": "hi"})
+
+    resp = asyncio.run(run())
+    assert resp.status_code == 200
+    assert resp.json() == {"ok": True}
+
+
+def test_rejects_public_client(monkeypatch):
+    async def fake_forward(method, url, token, json_body=None):
+        return httpx.Response(200, json={"ok": True})
+
+    monkeypatch.setattr(main, "get_credentials", lambda: ("t", "https://upstream"))
+    monkeypatch.setattr(main, "forward", fake_forward)
+    monkeypatch.setattr(main, "API_KEY", None)
+    monkeypatch.setattr(main, "LOCAL_ONLY", True)
+
+    async def run():
+        transport = httpx.ASGITransport(app=main.app, client=("203.0.113.5", 123))
+        async with httpx.AsyncClient(transport=transport, base_url="http://test") as c:
+            return await c.post("/v1/completions", json={"model": "qwen", "prompt": "hi"})
+
+    resp = asyncio.run(run())
+    assert resp.status_code == 403
+
+
+def test_is_local_address_ranges():
+    # IPv4 loopback and private networks
+    assert main.is_local_address("127.0.0.1")
+    assert main.is_local_address("10.0.0.1")
+    assert main.is_local_address("100.64.0.1")
+    assert main.is_local_address("172.16.0.1")
+    assert main.is_local_address("192.168.0.1")
+    assert main.is_local_address("169.254.1.1")
+    # IPv6 loopback, private, and link-local
+    assert main.is_local_address("::1")
+    assert main.is_local_address("fc00::1")
+    assert main.is_local_address("fe80::1")
+    # Public addresses should be rejected
+    assert not main.is_local_address("8.8.8.8")
+    assert not main.is_local_address("2001:4860:4860::8888")

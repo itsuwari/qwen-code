@@ -10,11 +10,13 @@ This standalone server exposes Qwen models using both OpenAI `/v1/completions` a
     pip install -e qwenfastapi
     ```
 3. Optional settings:
-   - `QWEN_FASTAPI_HOST` — interface to bind (default `127.0.0.1`; use `0.0.0.0` to listen on all addresses).
+   - `QWEN_FASTAPI_HOST` — interface to bind (default `local`, which only allows clients from private or link-local networks such as `10.0.0.0/8`, `100.0.0.0/8`, `172.16.0.0/12`, `192.168.0.0/16`, `169.254.0.0/16`, `fc00::/7`, and `fe80::/10`; use an explicit IP such as `0.0.0.0` to accept any address).
    - `QWEN_FASTAPI_API_KEY` — value clients must provide in the `X-API-Key` header.
+   - These can also be supplied on the command line with `--listen` and `--key`.
 4. Start the server:
     ```bash
-    qwenfastapi
+    qwenfastapi --help
+    qwenfastapi --listen local --key "$QWEN_FASTAPI_API_KEY"
     ```
     You can also run `python -m qwenfastapi.main`.
 5. Call the proxy:
