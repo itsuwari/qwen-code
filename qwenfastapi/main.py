@@ -1,5 +1,4 @@
 from fastapi import Depends, FastAPI, HTTPException, Request, Response
-
 import httpx
 import os
 import json
@@ -64,8 +63,8 @@ async def messages(req: Request, _=Depends(verify_api_key)) -> Response:
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
     upstream_resp = await forward("POST", f"{endpoint}/chat/completions", token, body)
-    if not upstream_resp.is_success:
-        return Response(content=upstream_resp.content, status_code=upstream_resp.status_code, media_type="application/json")
+    data = openai_to_anthropic(upstream_resp.json())
+    return Response(content=json.dumps(data), status_code=upstream_resp.status_code, media_type="application/json")
 
 @app.get("/v1/models")
 async def list_models(_=Depends(verify_api_key)) -> Response:
@@ -86,7 +85,11 @@ async def get_model(model: str, _=Depends(verify_api_key)) -> Response:
     resp = await forward("GET", f"{endpoint}/models/{model}", token)
     return Response(content=resp.content, status_code=resp.status_code, media_type="application/json")
 
+def main() -> None:
+    import uvicorn
+
+    uvicorn.run(app, host=HOST, port=3000)
+
 
 if __name__ == "__main__":
-    import uvicorn
-    uvicorn.run(app, host=HOST, port=3000)
+    main()

@@ -50,7 +50,6 @@ def test_responds_500_when_auth_missing(monkeypatch):
     monkeypatch.setattr(main, "API_KEY", "pw")
     client = TestClient(main.app)
     client.headers.update({"X-API-Key": "pw"})
-
     with respx.mock(assert_all_called=False):
         resp = client.post("/v1/completions", json={"model": "qwen", "prompt": "hi"})
         assert resp.status_code == 500

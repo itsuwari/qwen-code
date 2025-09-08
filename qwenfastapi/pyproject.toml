@@ -10,6 +10,9 @@ dependencies = [
     "respx",
 ]
 
+[project.scripts]
+qwenfastapi = "qwenfastapi.main:main"
+
 [project.optional-dependencies]
 test = ["pytest"]
 
