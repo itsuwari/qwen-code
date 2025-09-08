@@ -42,7 +42,9 @@ def test_forwards_upstream_error_status(client):
 
 
 def test_responds_500_when_auth_missing(monkeypatch):
-    monkeypatch.setattr(main, "get_credentials", lambda: (_ for _ in ()).throw(ValueError("No access token")))
+    def raise_no_access_token():
+        raise ValueError("No access token")
+    monkeypatch.setattr(main, "get_credentials", raise_no_access_token)
     client = TestClient(main.app)
     with respx.mock(assert_all_called=False):
         resp = client.post("/v1/completions", json={"model": "qwen", "prompt": "hi"})
