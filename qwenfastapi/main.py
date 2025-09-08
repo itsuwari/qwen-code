@@ -55,6 +55,8 @@ async def messages(req: Request) -> Response:
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
     upstream_resp = await forward("POST", f"{endpoint}/chat/completions", token, body)
+    if not upstream_resp.is_success:
+        return Response(content=upstream_resp.content, status_code=upstream_resp.status_code, media_type="application/json")
     data = openai_to_anthropic(upstream_resp.json())
     return Response(content=json.dumps(data), status_code=upstream_resp.status_code, media_type="application/json")
 
