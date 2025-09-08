@@ -1,0 +1,15 @@
+{
+  "name": "@qwen-code/api-proxy",
+  "version": "0.0.1",
+  "type": "module",
+  "main": "dist/server.js",
+  "scripts": {
+    "build": "tsc",
+    "start": "node dist/server.js",
+    "dev": "tsx src/server.ts",
+    "test": "vitest run"
+  },
+  "dependencies": {
+    "@qwen-code/qwen-code-core": "workspace:*"
+  }
+}
